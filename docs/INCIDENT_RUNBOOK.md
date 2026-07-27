@@ -5,6 +5,9 @@ Procedures for responding to security incidents and operational failures on Elca
 For the disclosure process and contacts, see [SECURITY.md](../SECURITY.md).  
 For the threat surface these procedures address, see [THREAT_MODEL.md](THREAT_MODEL.md).
 
+> **Extended runbooks** — detailed detection signals, containment steps, tabletop exercises, and post-incident review templates for all critical failure modes are in:  
+> **[docs/runbooks/](./runbooks/README.md)**
+
 ---
 
 ## Table of Contents
@@ -14,6 +17,18 @@ For the threat surface these procedures address, see [THREAT_MODEL.md](THREAT_MO
 3. [Indexer recovery from re-org](#3-indexer-recovery-from-re-org)
 4. [Compromised secret rotation](#4-compromised-secret-rotation)
 5. [Keeper subsystem operations](#5-keeper-subsystem-operations)
+
+**Quick links to extended runbooks:**
+- [Stalled Ingestion](./runbooks/stalled-ingestion.md)
+- [Chain Reorganization](./runbooks/reorganization.md)
+- [Database Outage](./runbooks/database-outage.md)
+- [Redis Outage](./runbooks/redis-outage.md)
+- [Compromised Admin Key](./runbooks/compromised-admin-key.md)
+- [Contract Pause Procedure](./runbooks/contract-pause.md)
+- [Pinata / IPFS Outage](./runbooks/pinata-outage.md)
+- [Wallet Incompatibility](./runbooks/wallet-incompatibility.md)
+- [Incorrect Deployment Configuration](./runbooks/incorrect-deployment-config.md)
+- [Secret Inventory](./secret-inventory.md)
 
 ---
 
