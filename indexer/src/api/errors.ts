@@ -8,6 +8,7 @@ export const ErrorCode = {
   UNAUTHORIZED: 'UNAUTHORIZED',
   FORBIDDEN:    'FORBIDDEN',
   RATE_LIMITED: 'RATE_LIMIT_EXCEEDED',
+  QUERY_TOO_EXPENSIVE: 'QUERY_TOO_EXPENSIVE',
 } as const;
 
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];

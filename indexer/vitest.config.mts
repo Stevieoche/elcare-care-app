@@ -5,7 +5,11 @@ export default defineConfig({
     environment: "node",
     globals: true,
     // Unit tests only — integration tests run via vitest.integration.config.mts
-    include: ["src/__tests__/**/*.test.ts"],
+    include: [
+      "src/__tests__/**/*.test.ts",
+      // Top-level tests directory (auth policy matrix, openapi contract, etc.)
+      "tests/**/*.test.ts",
+    ],
     // Integration tests need live Postgres/Redis and run via
     // vitest.integration.config.mts in their own CI job.
     exclude: ["**/node_modules/**", "src/__tests__/integration/**"],

@@ -1,0 +1,68 @@
+name: Indexer Tests
+
+on:
+  push:
+    paths:
+      - 'indexer/**'
+      - '.github/workflows/indexer-tests.yml'
+  pull_request:
+    paths:
+      - 'indexer/**'
+      - '.github/workflows/indexer-tests.yml'
+
+jobs:
+  unit-tests:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: indexer
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: indexer/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      # ── Auth policy matrix gate ───────────────────────────────────────────
+      # Fails CI when a newly-added route is not classified in ROUTE_POLICY_MATRIX.
+      # Fails CI when an operator route loses its security declaration.
+      - name: Run auth policy matrix tests
+        run: npx vitest run tests/auth-policy-matrix.test.ts --reporter=verbose
+
+      # ── Query cost model gate ─────────────────────────────────────────────
+      # Fails CI when over-budget queries are not rejected before DB access.
+      - name: Run query cost model tests
+        run: npx vitest run tests/query-cost.test.ts --reporter=verbose
+
+      # ── OpenAPI contract gate ─────────────────────────────────────────────
+      # Fails CI when a new route is added without an OpenAPI path entry.
+      - name: Run OpenAPI static contract tests
+        run: npx vitest run tests/openapi-contract.test.ts --reporter=verbose
+
+      # ── OpenAPI runtime contract gate ─────────────────────────────────────
+      # Fails CI when a route returns a shape not accepted by its OpenAPI schema.
+      - name: Run OpenAPI runtime contract tests
+        run: npx vitest run tests/openapi-runtime-contract.test.ts --reporter=verbose
+
+      # ── Cache service (thundering-herd) gate ──────────────────────────────
+      # Fails CI when coalescing, timeout, or poisoning protection regresses.
+      - name: Run cache service tests
+        run: npx vitest run src/__tests__/cache-service.test.ts --reporter=verbose
+
+      # ── Full unit test suite ──────────────────────────────────────────────
+      - name: Run all unit tests
+        run: npm test
+
+      # ── TypeScript type check ─────────────────────────────────────────────
+      - name: Type check
+        run: npx tsc --noEmit

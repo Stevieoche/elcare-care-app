@@ -46,6 +46,10 @@ describe('OpenAPI contract — representative responses', () => {
       '/sync/jobs',
       '/sync/jobs/{id}',
       '/admin/contracts',
+      '/admin/audit',
+      '/admin/audit/{requestId}',
+      '/admin/audit/stats',
+      '/admin/query-cost',
     ];
 
     for (const p of operatorPaths) {
@@ -79,5 +83,46 @@ describe('OpenAPI contract — representative responses', () => {
     const listingsPath = doc.paths['/listings'];
     expect(listingsPath).toBeDefined();
     expect(listingsPath.get.responses['200']).toBeDefined();
+  });
+
+  // ── New routes from auth + query-cost work ────────────────────────────────
+
+  it('documents /admin/query-cost as operator-protected with 400 QUERY_TOO_EXPENSIVE', () => {
+    const path = doc.paths['/admin/query-cost'];
+    expect(path, 'missing /admin/query-cost in OpenAPI spec').toBeDefined();
+    expect(path.get.responses['401']).toBeDefined();
+    expect(path.get.responses['403']).toBeDefined();
+    expect(path.get.responses['400']).toBeDefined();
+    // Verify the 400 schema documents QUERY_TOO_EXPENSIVE code
+    const schema400 = (path.get.responses['400'].content as any)?.['application/json']?.schema;
+    expect(schema400).toBeDefined();
+  });
+
+  it('documents /notifications/stream as a public SSE endpoint', () => {
+    const path = doc.paths['/notifications/stream'];
+    expect(path, 'missing /notifications/stream').toBeDefined();
+    const content200 = (path.get.responses['200'].content as any);
+    expect(content200?.['text/event-stream']).toBeDefined();
+    // Public — no security requirement
+    expect(path.get.security).toBeUndefined();
+  });
+
+  it('documents /notifications/summary as a public endpoint', () => {
+    const path = doc.paths['/notifications/summary'];
+    expect(path, 'missing /notifications/summary').toBeDefined();
+    expect(path.get.responses['200']).toBeDefined();
+  });
+
+  it('documents /wallets/{address}/notifications', () => {
+    const path = doc.paths['/wallets/{address}/notifications'];
+    expect(path, 'missing /wallets/{address}/notifications').toBeDefined();
+    expect(path.get.responses['200']).toBeDefined();
+  });
+
+  it('documents /admin/audit with CSV export support', () => {
+    const path = doc.paths['/admin/audit'];
+    expect(path, 'missing /admin/audit').toBeDefined();
+    const method = path.get as any;
+    expect(method.security).toEqual([{ operatorToken: [] }]);
   });
 });

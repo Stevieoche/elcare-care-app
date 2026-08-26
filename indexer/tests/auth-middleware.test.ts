@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, beforeEach } from 'vitest';
 import { authMiddleware, classifyRoute, loadAuthConfig, resetAuthConfigCache } from '../src/api/auth-middleware.js';
 import { Request, Response, NextFunction } from 'express';
 

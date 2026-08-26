@@ -32,6 +32,7 @@ import {
   artistMetricsQuerySchema,
   royaltyBreakdownQuerySchema,
   searchQuerySchema,
+  eventsQuerySchema,
 } from './query-schemas.js';
 import { isValidStellarAddress, STELLAR_ADDRESS_ERROR } from '../stellar-address.js';
 import {
@@ -45,7 +46,9 @@ import { rpc } from '@stellar/stellar-sdk';
 import { apiRequestDurationHistogram } from '../metrics.js';
 import { TTL } from '../cache-warmer.js';
 import { withDecimalAmounts } from '../token-metadata.js';
-import { authMiddleware, classifyRoute } from './auth-middleware.js';
+import { authMiddleware } from './auth-middleware.js';
+import { queryCostGuard, handleQueryCostDiagnostics } from './query-cost.js';
+import { getCached as getCachedService } from './cache-service.js';
 import { logger } from '../logger.js';
 
 
@@ -167,20 +170,18 @@ router.use(apiDurationMiddleware);
 
 const CACHE_TTL_SECONDS = parseInt(process.env.REDIS_CACHE_TTL_SECONDS || '30');
 
-async function getCached<T>(key: string, ttl: number, fetcher: () => Promise<T>): Promise<T> {
-  try {
-    const cached = await redis.get(key);
-    if (cached) return JSON.parse(cached) as T;
-  } catch {
-    // Redis unavailable — fall through to DB
-  }
-  const result = await fetcher();
-  try {
-    await (redis as any).setEx(key, ttl, JSON.stringify(result));
-  } catch {
-    // ignore cache write failures
-  }
-  return result;
+/**
+ * getCached — thin wrapper over the cache-service that adds thundering-herd
+ * protection. Popular keys (stats, recent activity) benefit from the
+ * distributed lock option.
+ */
+async function getCached<T>(
+  key: string,
+  ttl: number,
+  fetcher: () => Promise<T>,
+  opts: { distributed?: boolean } = {},
+): Promise<T> {
+  return getCachedService(key, ttl, fetcher, opts);
 }
 
 const serialize = (obj: any) =>
@@ -301,7 +302,7 @@ function sanitiseTsQuery(raw: string): string {
   return raw.replace(/[&|!:<>()]/g, ' ').trim();
 }
 
-router.get('/listings', lightRateLimiter, cacheMiddleware(TTL.LISTINGS_LIST), validateQuery(listingsQuerySchema), async (req: Request, res: Response, next: NextFunction) => {
+router.get('/listings', lightRateLimiter, cacheMiddleware(TTL.LISTINGS_LIST), queryCostGuard(), validateQuery(listingsQuerySchema), async (req: Request, res: Response, next: NextFunction) => {
   const { artist, owner, status, limit, offset, minPrice, maxPrice, search, cursor_ledger, cursor_direction } =
     (req as any).validatedQuery;
   try {
@@ -454,7 +455,7 @@ router.get('/listings', lightRateLimiter, cacheMiddleware(TTL.LISTINGS_LIST), va
 
 // ── GET /listings/:id ─────────────────────────────────────────────────────────
 
-router.get('/listings/:id', lightRateLimiter, cacheMiddleware(TTL.LISTING_DETAIL), async (req: Request, res: Response, next: NextFunction) => {
+router.get('/listings/:id', lightRateLimiter, cacheMiddleware(TTL.LISTING_DETAIL), queryCostGuard({ hasJoin: true }), async (req: Request, res: Response, next: NextFunction) => {
   const { id } = req.params;
   try {
     const listing = await prisma.listing.findUnique({
@@ -618,7 +619,7 @@ router.get('/ipfs/:cid', mediumRateLimiter, cacheMiddleware(300), async (req: Re
 
 // ── GET /auctions ─────────────────────────────────────────────────────────────
 
-router.get('/auctions', lightRateLimiter, cacheMiddleware(TTL.AUCTIONS_LIST), validateQuery(auctionsQuerySchema), async (req: Request, res: Response, next: NextFunction) => {
+router.get('/auctions', lightRateLimiter, cacheMiddleware(TTL.AUCTIONS_LIST), queryCostGuard(), validateQuery(auctionsQuerySchema), async (req: Request, res: Response, next: NextFunction) => {
   const { creator, status, limit, offset, cursor_ledger, cursor_direction } = (req as any).validatedQuery;
   try {
     const where: any = {};
@@ -649,7 +650,7 @@ router.get('/auctions', lightRateLimiter, cacheMiddleware(TTL.AUCTIONS_LIST), va
 
 // ── GET /auctions/:id ─────────────────────────────────────────────────────────
 
-router.get('/auctions/:id', lightRateLimiter, cacheMiddleware(TTL.AUCTION_DETAIL), async (req: Request, res: Response, next: NextFunction) => {
+router.get('/auctions/:id', lightRateLimiter, cacheMiddleware(TTL.AUCTION_DETAIL), queryCostGuard({ hasJoin: true }), async (req: Request, res: Response, next: NextFunction) => {
   const id = req.params.id as string;
   if (!/^\d+$/.test(id)) {
     return next(badRequest('Invalid ID format'));
@@ -711,7 +712,7 @@ router.get('/auctions/:id/blocked-bidders', lightRateLimiter, async (req: Reques
 
 // ── GET /offers ───────────────────────────────────────────────────────────────
 
-router.get('/offers', lightRateLimiter, validateQuery(offersQuerySchema), async (req: Request, res: Response, next: NextFunction) => {
+router.get('/offers', lightRateLimiter, queryCostGuard(), validateQuery(offersQuerySchema), async (req: Request, res: Response, next: NextFunction) => {
   const { listing_id, limit, offset, cursor_ledger, cursor_direction } = (req as any).validatedQuery;
   try {
     const where: any = {};
@@ -747,7 +748,8 @@ router.get('/activity/recent', cacheMiddleware(TTL.ACTIVITY_RECENT), async (req:
       prisma.marketplaceEvent.findMany({
         take: 20,
         orderBy: { ledgerSequence: 'desc' },
-      })
+      }),
+      { distributed: true },
     );
     res.json(serialize(results));
   } catch (err) {
@@ -757,7 +759,7 @@ router.get('/activity/recent', cacheMiddleware(TTL.ACTIVITY_RECENT), async (req:
 
 // ── GET /collections ──────────────────────────────────────────────────────────
 
-router.get('/collections', lightRateLimiter, cacheMiddleware(TTL.COLLECTIONS), validateQuery(collectionsQuerySchema), async (req: Request, res: Response, next: NextFunction) => {
+router.get('/collections', lightRateLimiter, cacheMiddleware(TTL.COLLECTIONS), queryCostGuard(), validateQuery(collectionsQuerySchema), async (req: Request, res: Response, next: NextFunction) => {
   const { kind, creator, limit, offset, cursor_ledger, cursor_direction } = (req as any).validatedQuery;
   try {
     const where: any = {};
@@ -883,7 +885,7 @@ router.get('/creators/:address/collections', lightRateLimiter, validateQuery(cre
 
 // ── GET /wallets/:address/activity ────────────────────────────────────────────
 
-router.get('/wallets/:address/activity', strictRateLimiter, validateQuery(walletActivityQuerySchema), async (req: Request, res: Response, next: NextFunction) => {
+router.get('/wallets/:address/activity', strictRateLimiter, queryCostGuard(), validateQuery(walletActivityQuerySchema), async (req: Request, res: Response, next: NextFunction) => {
   const address = req.params.address as string;
   const { limit, offset, cursor_ledger, cursor_direction } = (req as any).validatedQuery;
   const take = Math.min(limit ?? 50, 200);
@@ -968,7 +970,7 @@ router.get('/wallets/:address/royalty-stats', strictRateLimiter, async (req: Req
 // the given recipient address, newest-first, optionally bounded to the
 // inclusive ledger-sequence window [from, to]. Cached for 60 seconds.
 
-router.get('/wallets/:address/royalty-breakdown', lightRateLimiter, cacheMiddleware(60), validateQuery(royaltyBreakdownQuerySchema), async (req: Request, res: Response, next: NextFunction) => {
+router.get('/wallets/:address/royalty-breakdown', lightRateLimiter, cacheMiddleware(60), queryCostGuard(), validateQuery(royaltyBreakdownQuerySchema), async (req: Request, res: Response, next: NextFunction) => {
   const address = req.params.address as string;
   if (!isValidStellarAddress(address)) {
     return next(badRequest(STELLAR_ADDRESS_ERROR));
@@ -1008,7 +1010,7 @@ router.get('/wallets/:address/royalty-breakdown', lightRateLimiter, cacheMiddlew
 
 // ── GET /stats ────────────────────────────────────────────────────────────────
 
-router.get('/stats', lightRateLimiter, validateQuery(statsQuerySchema), async (req: Request, res: Response, next: NextFunction) => {
+router.get('/stats', lightRateLimiter, queryCostGuard({ isAggregation: true }), validateQuery(statsQuerySchema), async (req: Request, res: Response, next: NextFunction) => {
   const { from, to, range } = (req as any).validatedQuery;
   try {
     let dateFrom: Date | undefined;
@@ -1090,7 +1092,7 @@ router.get('/stats', lightRateLimiter, validateQuery(statsQuerySchema), async (r
 // Returns mints-over-time, volume-over-time, and conversion rate aggregates
 // for a given artist, scoped by an optional ?range=day|week|month query param.
 
-router.get('/artists/:address/metrics', lightRateLimiter, cacheMiddleware(60), validateQuery(artistMetricsQuerySchema), async (req: Request, res: Response, next: NextFunction) => {
+router.get('/artists/:address/metrics', lightRateLimiter, cacheMiddleware(60), queryCostGuard({ isAggregation: true }), validateQuery(artistMetricsQuerySchema), async (req: Request, res: Response, next: NextFunction) => {
   const address = req.params.address as string;
   const { range } = (req as any).validatedQuery;
 
@@ -1579,7 +1581,7 @@ router.get('/stats/top-artists', lightRateLimiter, async (req: Request, res: Res
 // }
 // Entity buckets not requested in ?types= are omitted from the response.
 
-router.get('/search', mediumRateLimiter, validateQuery(searchQuerySchema), async (req: Request, res: Response, next: NextFunction) => {
+router.get('/search', mediumRateLimiter, queryCostGuard(), validateQuery(searchQuerySchema), async (req: Request, res: Response, next: NextFunction) => {
   const { q, types, limit } = (req as any).validatedQuery as {
     q: string;
     types: Array<'listings' | 'auctions' | 'collections'>;
@@ -1741,6 +1743,12 @@ router.get('/config/auction', cacheMiddleware(60), async (req: Request, res: Res
     next(internalError('Failed to fetch auction configuration'));
   }
 });
+
+// ── GET /admin/query-cost ─────────────────────────────────────────────────────
+// Operator-only diagnostics: returns cost weights and budget limits.
+// No DB access — safe to call frequently for observability.
+
+router.get('/admin/query-cost', operationalRateLimiter, authMiddleware('operator'), handleQueryCostDiagnostics);
 
 // ── Notification routes (Issue #8) ────────────────────────────────────────────
 import notificationRouter from './notification-routes.js';

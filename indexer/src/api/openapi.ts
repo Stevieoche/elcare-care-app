@@ -807,6 +807,190 @@ registry.registerPath({
   },
 });
 
+// GET /admin/audit
+registry.registerPath({
+  method: 'get',
+  path: '/admin/audit',
+  tags: ['Admin'],
+  summary: 'Query audit records (operator only)',
+  description: 'Search operational audit log with optional filters. Supports CSV export via ?export=csv. Requires operator token.',
+  security: [{ operatorToken: [] }],
+  request: {
+    query: z.object({
+      actor:       z.string().optional(),
+      actionType:  z.string().optional(),
+      requestId:   z.string().optional(),
+      startDate:   z.string().optional(),
+      endDate:     z.string().optional(),
+      limit:       z.coerce.number().min(1).max(1000).optional(),
+      offset:      z.coerce.number().min(0).optional(),
+      export:      z.enum(['csv']).optional(),
+    }),
+  },
+  responses: {
+    200: { description: 'Audit records with pagination envelope', content: { 'application/json': { schema: z.record(z.string(), z.unknown()) } } },
+    401: { description: 'Missing or invalid operator token', content: { 'application/json': { schema: ErrorResponseSchema } } },
+    403: { description: 'Operator access not allowed from this IP', content: { 'application/json': { schema: ErrorResponseSchema } } },
+  },
+});
+
+// GET /admin/audit/:requestId
+registry.registerPath({
+  method: 'get',
+  path: '/admin/audit/{requestId}',
+  tags: ['Admin'],
+  summary: 'Get audit record by request ID (operator only)',
+  security: [{ operatorToken: [] }],
+  request: { params: z.object({ requestId: z.string().openapi({ description: 'Request ID to look up' }) }) },
+  responses: {
+    200: { description: 'Audit record', content: { 'application/json': { schema: z.record(z.string(), z.unknown()) } } },
+    401: { description: 'Missing or invalid operator token', content: { 'application/json': { schema: ErrorResponseSchema } } },
+    403: { description: 'Operator access not allowed from this IP', content: { 'application/json': { schema: ErrorResponseSchema } } },
+  },
+});
+
+// GET /admin/audit/stats
+registry.registerPath({
+  method: 'get',
+  path: '/admin/audit/stats',
+  tags: ['Admin'],
+  summary: 'Audit statistics (operator only)',
+  description: 'Returns action-type counts and 10 most-recent audit entries. Requires operator token.',
+  security: [{ operatorToken: [] }],
+  responses: {
+    200: { description: 'Audit statistics', content: { 'application/json': { schema: z.record(z.string(), z.unknown()) } } },
+    401: { description: 'Missing or invalid operator token', content: { 'application/json': { schema: ErrorResponseSchema } } },
+    403: { description: 'Operator access not allowed from this IP', content: { 'application/json': { schema: ErrorResponseSchema } } },
+  },
+});
+
+// GET /admin/query-cost
+registry.registerPath({
+  method: 'get',
+  path: '/admin/query-cost',
+  tags: ['Admin'],
+  summary: 'Query cost model diagnostics (operator only)',
+  description:
+    'Returns the current cost weights, per-tier budgets, and the env-var names used to tune them. ' +
+    'No database access — safe to call frequently for observability. Does not expose execution plans or schema.',
+  security: [{ operatorToken: [] }],
+  responses: {
+    200: {
+      description: 'Cost model configuration',
+      content: {
+        'application/json': {
+          schema: z.object({
+            weights: z.record(z.string(), z.number()).openapi({ description: 'Current cost weight per query dimension' }),
+            budgets: z.object({
+              public:   z.number().int().openapi({ description: 'Max cost for public/wallet-authed callers' }),
+              operator: z.number().int().openapi({ description: 'Max cost for operator-authed callers' }),
+            }),
+            envVars: z.record(z.string(), z.string()).openapi({ description: 'Env-var names for budget overrides' }),
+          }),
+        },
+      },
+    },
+    400: {
+      description: 'Query too expensive',
+      content: {
+        'application/json': {
+          schema: z.object({
+            error: z.object({
+              code:    z.literal('QUERY_TOO_EXPENSIVE'),
+              message: z.string(),
+              details: z.object({
+                estimatedCost: z.number().int(),
+                budget:        z.number().int(),
+                breakdown: z.object({
+                  components: z.array(z.object({ reason: z.string(), cost: z.number().int() })),
+                  total:      z.number().int(),
+                }),
+              }).optional(),
+            }),
+          }),
+        },
+      },
+    },
+    401: { description: 'Missing or invalid operator token', content: { 'application/json': { schema: ErrorResponseSchema } } },
+    403: { description: 'Operator access not allowed from this IP', content: { 'application/json': { schema: ErrorResponseSchema } } },
+  },
+});
+
+// GET /notifications/stream  (SSE — public)
+registry.registerPath({
+  method: 'get',
+  path: '/notifications/stream',
+  tags: ['Notifications'],
+  summary: 'Real-time notification stream (SSE)',
+  description:
+    'Wallet-filtered SSE stream of notifiable marketplace events. ' +
+    'Accepts optional ?wallet=, ?domain=, ?priority= filters and Last-Event-ID for durable resume. ' +
+    'Returns 503 when the notification connection limit is reached.',
+  request: {
+    query: z.object({
+      wallet:      z.string().optional().openapi({ description: 'Filter to events involving this Stellar address' }),
+      domain:      z.string().optional().openapi({ description: 'Comma-separated domain filter (listing, auction, offer, …)' }),
+      priority:    z.string().optional().openapi({ description: 'Comma-separated priority filter (HIGH, MEDIUM, LOW)' }),
+      lastEventId: z.string().optional().openapi({ description: 'Resume from this event ID' }),
+    }),
+  },
+  responses: {
+    200: {
+      description: 'SSE notification stream (text/event-stream)',
+      content: { 'text/event-stream': { schema: { type: 'string' } } },
+    },
+    503: { description: 'Notification stream at capacity', content: { 'application/json': { schema: ErrorResponseSchema } } },
+  },
+});
+
+// GET /notifications/summary  (public)
+registry.registerPath({
+  method: 'get',
+  path: '/notifications/summary',
+  tags: ['Notifications'],
+  summary: 'Notification bell summary',
+  description: 'Returns the total notification count, urgent count (last 24 h HIGH-priority), and the 5 most-recent notifications for a wallet.',
+  request: {
+    query: z.object({
+      wallet: z.string().openapi({ description: 'Wallet Stellar address (required)' }),
+    }),
+  },
+  responses: {
+    200: {
+      description: 'Notification summary',
+      content: { 'application/json': { schema: z.record(z.string(), z.unknown()) } },
+    },
+    400: { description: 'Missing or invalid wallet', content: { 'application/json': { schema: ErrorResponseSchema } } },
+  },
+});
+
+// GET /wallets/:address/notifications  (authenticated)
+registry.registerPath({
+  method: 'get',
+  path: '/wallets/{address}/notifications',
+  tags: ['Wallets', 'Notifications'],
+  summary: 'Paginated notification feed for a wallet',
+  description:
+    'Returns pre-classified IndexerNotification objects for the wallet. ' +
+    'Supports optional ?domain= and ?priority= filters. Rate-limited to 20 req/min.',
+  request: {
+    params: z.object({ address: z.string().openapi({ description: 'Wallet Stellar address' }) }),
+    query: z.object({
+      limit:    z.coerce.number().int().min(1).max(100).optional().openapi({ description: 'Page size (default 50, max 100)' }),
+      offset:   z.coerce.number().int().min(0).optional().openapi({ description: 'Rows to skip' }),
+      domain:   z.string().optional().openapi({ description: 'Comma-separated domain filter' }),
+      priority: z.string().optional().openapi({ description: 'Comma-separated priority filter (HIGH, MEDIUM, LOW)' }),
+    }),
+  },
+  responses: {
+    200: {
+      description: 'Notification list',
+      content: { 'application/json': { schema: z.array(z.record(z.string(), z.unknown())) } },
+    },
+    400: { description: 'Invalid wallet address', content: { 'application/json': { schema: ErrorResponseSchema } } },
+  },
+});
+
 const securitySchemes = {
   operatorToken: {
     type: 'apiKey',
